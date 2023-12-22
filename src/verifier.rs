@@ -1,6 +1,5 @@
 use crate::{Error, STEAM_URL};
 
-#[cfg(feature = "reqwest-09x")]
 use futures::{
     future::{self, Either},
     Future, Stream,
@@ -89,14 +88,14 @@ impl Verifier {
         }
     }
 
-    #[cfg(feature = "reqwest-09x")]
     /// Constructs and sends a synchronous verification request. Requires the `reqwest-09x`
     /// feature.
     pub fn make_verify_request<S: AsRef<str>>(
-        client: &reqwest::Client,
+        client: &reqwest::blocking::Client,
         querystring: S,
     ) -> Result<u64, Error> {
-        let (req, verifier) = Self::from_querystring(querystring)?;
+        let (req, verifier) =
+            Self::from_querystring(querystring).map_err(|_| Error::AuthenticationFailed)?; // Handle query string parsing error
 
         let (parts, body) = req.into_parts();
 
@@ -105,45 +104,40 @@ impl Verifier {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body)
             .send()
-            .map_err(Error::Reqwest)
-            .and_then(|mut response| {
-                let text = response.text().map_err(Error::Reqwest)?;
-
-                verifier.verify_response(text)
+            .map_err(|e| Error::Reqwest(e))
+            .and_then(|mut response| response.text().map_err(Error::Reqwest))
+            .and_then(|text| {
+                verifier
+                    .verify_response(&text)
+                    .map_err(|_| Error::AuthenticationFailed)
             })
     }
 
-    #[cfg(feature = "reqwest-09x")]
-    /// Constructs and sends an asynchronous verification request. Requires the `reqwest-09x`
-    /// feature.
-    pub fn make_verify_request_async<S: AsRef<str>>(
-        client: &reqwest::r#async::Client,
-        querystring: S,
-    ) -> impl Future<Item = u64, Error = Error> {
-        let (req, verifier) = match Self::from_querystring(querystring) {
-            Ok(rv) => rv,
-            Err(e) => return Either::A(future::err(e)),
-        };
+    /// Constructs and sends an asynchronous verification request.
+    pub async fn make_verify_request_async<S: AsRef<str>>(
+    client: &reqwest::Client,
+    querystring: S,
+) -> Result<u64, Error> {
+    let (req, verifier) = match Self::from_querystring(querystring) {
+        Ok(rv) => rv,
+        Err(_) => return Err(Error::AuthenticationFailed), // Handle query string parsing error
+    };
 
-        let (parts, body) = req.into_parts();
+    let (parts, body) = req.into_parts();
 
-        Either::B(
-            client
-                .post(&parts.uri.to_string())
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .body(body)
-                .send()
-                .map_err(Error::Reqwest)
-                .and_then(|res| res.into_body().concat2().map_err(Error::Reqwest))
-                .and_then(move |body| {
-                    let s = std::str::from_utf8(&body)
-                        .map_err(|_| Error::AuthenticationFailed)?
-                        .to_owned();
+    let response = client
+        .post(&parts.uri.to_string())
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+        .map_err(Error::Reqwest)?; // Convert reqwest::Error to Error::Reqwest
 
-                    verifier.verify_response(s)
-                }),
-        )
-    }
+    let text = response.text().await.map_err(Error::Reqwest)?; // Convert reqwest::Error to Error::Reqwest
+
+    verifier.verify_response(&text)
+        .map_err(|_| Error::AuthenticationFailed) // Handle verification error
+}
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]

@@ -70,7 +70,6 @@ pub enum Error {
     #[fail(display = "error deserializing url encoded data: {}", _0)]
     Deserialize(serde_urlencoded::de::Error),
     #[fail(display = "reqwest error: {}", _0)]
-    #[cfg(feature = "reqwest-09x")]
     /// There was an error during the verify request
     Reqwest(reqwest::Error),
 }
